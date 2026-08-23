@@ -15,11 +15,13 @@ mkdir -p \
   "$STAGE/usr/share/icons/hicolor/256x256/apps" \
   "$STAGE/usr/lib/systemd/user"
 
-install -m 755 "$ROOT/dist/powerzap/powerzap" "$STAGE/usr/bin/powerzap"
-install -m 755 "$ROOT/dist/powerzap-scheduler/powerzap-scheduler" "$STAGE/usr/bin/powerzap-scheduler"
+install -m 755 "$ROOT/dist/powerzap" "$STAGE/usr/bin/powerzap"
+install -m 755 "$ROOT/dist/powerzap-scheduler" "$STAGE/usr/bin/powerzap-scheduler"
 install -m 644 "$ROOT/packaging/powerzap.desktop" "$STAGE/usr/share/applications/"
 install -m 644 "$ROOT/assets/icon.png" "$STAGE/usr/share/icons/hicolor/256x256/apps/powerzap.png"
 install -m 644 "$ROOT/packaging/powerzap-scheduler.service" "$STAGE/usr/lib/systemd/user/"
+
+INSTALLED_SIZE=$(( $(du -sk "$ROOT/dist/powerzap" | cut -f1) + $(du -sk "$ROOT/dist/powerzap-scheduler" | cut -f1) ))
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: powerzap
@@ -28,7 +30,7 @@ Section: net
 Priority: optional
 Architecture: ${ARCH}
 Depends: libgl1, libglib2.0-0, systemd
-Installed-Size: $(du -sk "$ROOT/dist/powerzap" | cut -f1)
+Installed-Size: ${INSTALLED_SIZE}
 Maintainer: HonoravelMacho <honoravelmacho@users.noreply.github.com>
 Description: Agendador de mensagens WhatsApp com Evolution API
  PowerZap permite agendar e enviar mensagens do WhatsApp via
