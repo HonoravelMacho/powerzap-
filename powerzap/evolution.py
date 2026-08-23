@@ -40,7 +40,11 @@ class EvolutionAPI:
         """Cria a instância já solicitando QR Code."""
         return self._request(
             "POST", "/instance/create",
-            {"instanceName": self.instance, "qrcode": True},
+            {
+                "instanceName": self.instance,
+                "integration": "WHATSAPP-BAILEYS",
+                "qrcode": True,
+            },
         )
 
     def connect_qr(self) -> str:
@@ -75,3 +79,23 @@ class EvolutionAPI:
             "POST", f"/message/sendText/{self.instance}",
             {"number": number, "text": text},
         )
+
+    # ---- Contatos ----
+
+    def find_contacts(self) -> list:
+        """Lista os contatos sincronizados da instância."""
+        data = self._request("POST", f"/chat/findContacts/{self.instance}", {})
+        rows = data.get("contacts") if isinstance(data, dict) else (data or [])
+        out = []
+        for r in rows:
+            jid = r.get("remoteJid") or ""
+            if not jid or "@" not in jid:
+                continue
+            is_group = jid.endswith("@g.us")
+            name = (r.get("pushName") or r.get("name") or "").strip()
+            out.append({
+                "number": jid if is_group else jid.split("@")[0],
+                "name": name,
+                "is_group": is_group,
+            })
+        return out

@@ -29,7 +29,7 @@ Version: ${VERSION}
 Section: net
 Priority: optional
 Architecture: ${ARCH}
-Depends: libgl1, libglib2.0-0, systemd
+Depends: libgl1, libglib2.0-0, libgtk-3-0, libblkid1, liblzma5, libmpv1 | libmpv2, systemd
 Installed-Size: ${INSTALLED_SIZE}
 Maintainer: HonoravelMacho <honoravelmacho@users.noreply.github.com>
 Description: Agendador de mensagens WhatsApp com Evolution API

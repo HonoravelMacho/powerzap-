@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_status_time
     ON messages(status, scheduled_at);
+CREATE TABLE IF NOT EXISTS contacts (
+    number TEXT PRIMARY KEY,
+    name TEXT,
+    is_group INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+);
 """
 
 
@@ -173,3 +179,35 @@ def mark_failed(msg_id: int, error: str):
             "UPDATE messages SET status='falhou', error=? WHERE id=?",
             (error[:500], msg_id),
         )
+
+
+# ---------------- Contatos ----------------
+
+def replace_contacts(contacts: list):
+    now = _now()
+    with conn() as c:
+        c.execute("DELETE FROM contacts")
+        c.executemany(
+            "INSERT INTO contacts(number, name, is_group, updated_at) VALUES(?, ?, ?, ?)",
+            [
+                (ct["number"], ct["name"], 1 if ct.get("is_group") else 0, now)
+                for ct in contacts
+            ],
+        )
+
+
+def list_contacts(query: str = ""):
+    sql = "SELECT * FROM contacts "
+    params: list = []
+    if query:
+        sql += "WHERE lower(name) LIKE ? OR number LIKE ? "
+        like = f"%{query.lower()}%"
+        params = [like, f"%{query}%"]
+    sql += "ORDER BY is_group, CASE WHEN name = '' THEN 1 ELSE 0 END, name LIMIT 500"
+    with conn() as c:
+        return [dict(r) for r in c.execute(sql, params)]
+
+
+def count_contacts() -> int:
+    with conn() as c:
+        return c.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]

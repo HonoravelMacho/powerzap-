@@ -1,10 +1,13 @@
 """Calendário interativo em tela cheia com CRUD de mensagens."""
 import calendar as pycal
+import threading
 from datetime import date, datetime
 
 import flet as ft
 
 from powerzap import db
+from powerzap.evolution import EvolutionError
+from powerzap.views.connect_view import get_api
 
 STATUS_COLORS = {
     "pendente": ft.colors.AMBER_400,
@@ -13,6 +16,130 @@ STATUS_COLORS = {
 }
 
 PRESET_HOURS = ["08:00", "09:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00"]
+
+
+class ContactPickerDialog(ft.AlertDialog):
+    def __init__(self, page, on_pick):
+        super().__init__(modal=True)
+        self.page_ref = page
+        self.on_pick = on_pick
+        self.contacts = []
+
+        self.search_field = ft.TextField(
+            label="Buscar por nome ou número...",
+            prefix_icon=ft.icons.SEARCH,
+            on_change=lambda e: self._render_list(),
+            border_radius=10,
+        )
+        self.status_text = ft.Text("", size=12,
+                                   color=ft.colors.with_opacity(0.6, ft.colors.WHITE))
+        self.list_area = ft.ListView(expand=True, spacing=4)
+
+        self.actions = [
+            ft.TextButton("Fechar", on_click=lambda e: self.page_ref.close(self)),
+        ]
+        self.content = ft.Container(
+            width=540,
+            height=600,
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(ft.icons.CONTACTS, color=ft.colors.GREEN_400),
+                    ft.Text("Selecionar contato", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True),
+                    ft.IconButton(
+                        icon=ft.icons.SYNC, tooltip="Atualizar da API",
+                        on_click=lambda e: self._load(),
+                    ),
+                ]),
+                self.search_field,
+                self.list_area,
+                self.status_text,
+            ], tight=False, spacing=10),
+        )
+
+    def open_dialog(self):
+        self.page_ref.open(self)
+        threading.Thread(target=self._load, daemon=True).start()
+
+    def _set_status(self, msg: str):
+        self.status_text.value = msg
+        try:
+            self.update()
+        except AssertionError:
+            pass
+
+    def _load(self):
+        cached = db.count_contacts()
+        if not cached:
+            self.list_area.controls = [
+                ft.Container(
+                    alignment=ft.alignment.center, padding=40,
+                    content=ft.ProgressRing(28, stroke_width=3),
+                )
+            ]
+            self._set_status("Sincronizando contatos da Evolution API...")
+        else:
+            self._set_status(f"Atualizando... ({cached} em cache)")
+
+        try:
+            api = get_api()
+            fresh = api.find_contacts()
+            if fresh or not cached:
+                db.replace_contacts(fresh)
+            source = "API"
+        except (EvolutionError, Exception) as ex:
+            self._set_status(f"Sem conexão com a API — exibindo cache local ({ex.__class__.__name__})")
+            self.contacts = db.list_contacts(self.search_field.value or "")
+            self._render_list()
+            return
+
+        self.contacts = db.list_contacts(self.search_field.value or "")
+        self.status_text.value = f"{len(self.contacts)} contato(s) carregados da {source}."
+        self._render_list()
+
+    def _render_list(self):
+        query = (self.search_field.value or "").strip()
+        items = db.list_contacts(query) if query else (
+            self.contacts if self.contacts else db.list_contacts()
+        )
+        rows = []
+        for ct in items[:300]:
+            name = ct["name"] or "(sem nome)"
+            icon = ft.icons.GROUPS if ct["is_group"] else ft.icons.PERSON_OUTLINE
+            rows.append(
+                ft.ListTile(
+                    leading=ft.Icon(icon, color=ft.colors.GREEN_300),
+                    title=ft.Text(name, weight=ft.FontWeight.W_600),
+                    subtitle=ft.Text(ct["number"], size=12,
+                                     color=ft.colors.with_opacity(0.55, ft.colors.WHITE)),
+                    dense=True,
+                    on_click=lambda e, c=ct: self._pick(c),
+                )
+            )
+        if not rows:
+            rows.append(ft.Container(
+                padding=30,
+                content=ft.Column([
+                    ft.Icon(ft.icons.PHONE_DISABLED_OUTLINED, size=36,
+                            color=ft.colors.with_opacity(0.35, ft.colors.WHITE)),
+                    ft.Text(
+                        "Nenhum contato encontrado.\n"
+                        "Conecte o WhatsApp na aba 'Conexão' e envie/receba\n"
+                        "mensagens para que os contatos sejam sincronizados.",
+                        size=12, text_align=ft.TextAlign.CENTER,
+                        color=ft.colors.with_opacity(0.55, ft.colors.WHITE),
+                    ),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            ))
+        self.list_area.controls = rows
+        try:
+            self.update()
+        except AssertionError:
+            pass
+
+    def _pick(self, contact):
+        self.page_ref.close(self)
+        self.on_pick(contact)
 
 
 class MessageDialog(ft.AlertDialog):
@@ -27,6 +154,12 @@ class MessageDialog(ft.AlertDialog):
             label="Número do WhatsApp",
             hint_text="5511999999999",
             width=280,
+        )
+        pick_contact_btn = ft.IconButton(
+            icon=ft.icons.CONTACTS,
+            tooltip="Selecionar contato da lista",
+            icon_color=ft.colors.GREEN_400,
+            on_click=self._open_picker,
         )
         self.text_field = ft.TextField(
             label="Mensagem", multiline=True, min_lines=3, max_lines=6, expand=True
@@ -78,7 +211,7 @@ class MessageDialog(ft.AlertDialog):
             content=ft.Column([
                 ft.Text("Editar mensagem" if message else "Nova mensagem agendada",
                         size=18, weight=ft.FontWeight.BOLD),
-                self.number_field,
+                ft.Row([self.number_field, pick_contact_btn], spacing=6),
                 self.text_field,
                 ft.Row([self.date_field, self.time_field]),
                 quick_hours,
@@ -89,6 +222,20 @@ class MessageDialog(ft.AlertDialog):
     def _set_hour(self, h):
         self.time_field.value = h
         self.update()
+
+    def _open_picker(self, e=None):
+        picker = ContactPickerDialog(
+            self.page_ref,
+            on_pick=lambda c: self._set_contact(c),
+        )
+        picker.open_dialog()
+
+    def _set_contact(self, contact: dict):
+        self.number_field.value = contact["number"]
+        try:
+            self.update()
+        except AssertionError:
+            pass
 
     def _close(self):
         self.page_ref.close(self)
