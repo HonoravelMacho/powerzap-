@@ -9,7 +9,7 @@ class EvolutionError(Exception):
 
 
 class EvolutionAPI:
-    def __init__(self, url: str, api_key: str, instance: str, timeout: float = 15.0):
+    def __init__(self, url: str, api_key: str, instance: str, timeout: float = 30.0):
         self.url = url.rstrip("/")
         self.api_key = api_key
         self.instance = instance
@@ -21,12 +21,13 @@ class EvolutionAPI:
             h["apikey"] = self.api_key
         return h
 
-    def _request(self, method: str, path: str, json_body=None):
+    def _request(self, method: str, path: str, json_body=None,
+                 timeout: float | None = None):
         url = f"{self.url}{path}"
         try:
             resp = requests.request(
                 method, url, headers=self._headers(), json=json_body,
-                timeout=self.timeout,
+                timeout=self.timeout if timeout is None else timeout,
             )
         except requests.RequestException as e:
             raise EvolutionError(f"Falha de conexão com a Evolution API: {e}") from e
@@ -49,7 +50,7 @@ class EvolutionAPI:
 
     def connect_qr(self) -> str:
         """Retorna o QR Code em data-URI base64 para pareamento."""
-        data = self._request("GET", f"/instance/connect/{self.instance}")
+        data = self._request("GET", f"/instance/connect/{self.instance}", timeout=60)
         b64 = data.get("base64") or ""
         if not b64:
             raise EvolutionError("Resposta sem QR Code. A instância pode já estar conectada.")
@@ -84,7 +85,8 @@ class EvolutionAPI:
 
     def find_contacts(self) -> list:
         """Lista os contatos sincronizados da instância."""
-        data = self._request("POST", f"/chat/findContacts/{self.instance}", {})
+        data = self._request("POST", f"/chat/findContacts/{self.instance}",
+                             {}, timeout=120)
         rows = data.get("contacts") if isinstance(data, dict) else (data or [])
         out = []
         for r in rows:

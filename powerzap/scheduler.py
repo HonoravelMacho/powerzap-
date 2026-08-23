@@ -13,6 +13,15 @@ log = logging.getLogger("powerzap.scheduler")
 def process_due_messages(api: EvolutionAPI) -> int:
     now = db._now()
     due = db.list_pending(now)
+    if not due:
+        return 0
+    if not api.is_connected():
+        log.warning(
+            "%d mensagem(ns) aguardando, mas a instância '%s' não está conectada. "
+            "Tentativas serão mantidas como pendentes.",
+            len(due), api.instance,
+        )
+        return 0
     sent = 0
     for msg in due:
         try:

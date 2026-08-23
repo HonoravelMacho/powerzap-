@@ -1,4 +1,7 @@
 """Conexão do WhatsApp via QR Code (Evolution API)."""
+import threading
+import time
+
 import flet as ft
 
 from powerzap import db
@@ -58,6 +61,7 @@ class ConnectView(ft.Column):
                    alignment=ft.MainAxisAlignment.CENTER, wrap=True),
         ]
         self.reload()
+        threading.Thread(target=self._set_status, daemon=True).start()
 
     def reload(self):
         pass
@@ -71,6 +75,8 @@ class ConnectView(ft.Column):
             info = state.get("instance") or state
             raw = str(info.get("state", "desconhecido")).lower()
             label, color = STATE_LABELS.get(raw, (raw.capitalize(), ft.colors.GREY))
+            if raw == "open":
+                self.qr_image.visible = False
             self.status_row.controls = [
                 ft.Icon(ft.icons.CIRCLE, size=12, color=color),
                 ft.Text(f"Instância '{info.get('name', '')}': {label}", weight=ft.FontWeight.BOLD),
@@ -98,28 +104,67 @@ class ConnectView(ft.Column):
             self.update()
         except AssertionError:
             pass
-        try:
-            api = get_api()
+
+        def task():
             try:
-                qr = api.connect_qr()
-            except EvolutionError:
-                api.create_instance()
-                qr = api.connect_qr()
-            self.qr_image.src_base64 = qr.split(",", 1)[-1]
-            self.status_row.controls = [
-                ft.Icon(ft.icons.QR_CODE_SCANNER, color=ft.colors.GREEN_400),
-                ft.Text("Escaneie o QR Code pelo WhatsApp"),
-            ]
-        except EvolutionError as ex:
-            self.qr_image.visible = False
-            self.status_row.controls = [
-                ft.Icon(ft.icons.ERROR_OUTLINE, color=ft.colors.RED_400),
-                ft.Text(str(ex), size=13),
-            ]
-        self.update()
+                api = get_api()
+                state = str((api.connection_state().get("instance") or {}).get("state", "")).lower()
+                if state == "open":
+                    self._set_status()
+                    return
+                try:
+                    qr = api.connect_qr()
+                except EvolutionError:
+                    api.create_instance()
+                    qr = api.connect_qr()
+                self.qr_image.src_base64 = qr.split(",", 1)[-1]
+                self.status_row.controls = [
+                    ft.Icon(ft.icons.QR_CODE_SCANNER, color=ft.colors.GREEN_400),
+                    ft.Text("Escaneie o QR Code pelo WhatsApp..."),
+                ]
+                try:
+                    self.update()
+                except AssertionError:
+                    pass
+                self._poll_until_connected()
+            except (EvolutionError, Exception) as ex:
+                self.qr_image.visible = False
+                self.status_row.controls = [
+                    ft.Icon(ft.icons.ERROR_OUTLINE, color=ft.colors.RED_400),
+                    ft.Expanded(ft.Text(str(ex), size=13)),
+                ]
+                try:
+                    self.update()
+                except AssertionError:
+                    pass
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _poll_until_connected(self, max_attempts: int = 60):
+        api = get_api()
+        for _ in range(max_attempts):
+            time.sleep(4)
+            try:
+                info = api.connection_state().get("instance") or {}
+                raw = str(info.get("state", "")).lower()
+            except (EvolutionError, Exception):
+                continue
+            if raw == "open":
+                self.qr_image.visible = False
+                self._set_status()
+                return
+            if raw == "close":
+                self.status_row.controls = [
+                    ft.Icon(ft.icons.QR_CODE_2_OFF, color=ft.colors.RED_400),
+                    ft.Text("QR Code expirou — clique em 'Gerar QR Code' novamente."),
+                ]
+                try:
+                    self.update()
+                except AssertionError:
+                    pass
+                return
 
     def check_status(self, e=None):
-        import threading
         threading.Thread(target=self._set_status, daemon=True).start()
 
     def logout(self, e=None):

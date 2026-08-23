@@ -34,9 +34,9 @@ services:
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://evolution:evolution@postgres:5432/evolution?schema=public
       CACHE_LOCAL_ENABLED: "false"
-      REDIS_ENABLED: "true"
-      REDIS_URI: redis://redis:6379
-      REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379
+      CACHE_REDIS_PREFIX_KEY: powerzap
       CONFIG_SESSION_PHONE_CLIENT: PowerZap
       CONFIG_SESSION_PHONE_NAME: Chrome
     volumes:
