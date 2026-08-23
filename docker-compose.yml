@@ -1,0 +1,48 @@
+name: powerzap
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: powerzap
+      EXPOSE_IN_INSTANCES: "true"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@postgres:5432/evolution?schema=public
+      CACHE_LOCAL_ENABLED: "false"
+      REDIS_ENABLED: "true"
+      REDIS_URI: redis://redis:6379
+      REDIS_PREFIX_KEY: evolution
+      CONFIG_SESSION_PHONE_CLIENT: PowerZap
+      CONFIG_SESSION_PHONE_NAME: Chrome
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:

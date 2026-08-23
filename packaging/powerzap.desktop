@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PowerZap
+GenericName=Agendador de Mensagens WhatsApp
+Comment=Agende e envie mensagens do WhatsApp via Evolution API
+Exec=/usr/bin/powerzap
+Icon=powerzap
+Terminal=false
+Categories=Network;InstantMessaging;Utility;
+Keywords=whatsapp;mensagem;agendamento;evolution;
+StartupWMClass=powerzap

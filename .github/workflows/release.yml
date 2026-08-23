@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0 pillow
+
+      - name: Gerar ícones
+        run: python packaging/gen_icon.py
+
+      - name: Definir versão
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0-dev.$(date +%Y%m%d%H%M%S)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compilar app GUI (flet pack)
+        run: flet pack run.py --name powerzap --icon assets/icon.png
+
+      - name: Compilar scheduler
+        run: pyinstaller --noconfirm --onefile --name powerzap-scheduler powerzap/scheduler.py
+
+      - name: Montar pacote .deb
+        run: bash packaging/build_deb.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Instalar fpm e gerar .rpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby
+          sudo gem install --no-document fpm
+          bash packaging/build_rpm.sh "dist/powerzap_${{ steps.ver.outputs.version }}_amd64.deb" "${{ steps.ver.outputs.version }}"
+
+      - name: Publicar artefatos Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0 pillow
+
+      - name: Gerar ícones
+        shell: pwsh
+        run: python packaging/gen_icon.py
+
+      - name: Compilar executável Windows
+        shell: pwsh
+        run: flet pack run.py --name PowerZap --icon assets/icon.ico
+
+      - name: Publicar artefato Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-executable
+          path: dist/PowerZap.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar artefatos
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: release-assets
+
+      - name: Criar Release no GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
