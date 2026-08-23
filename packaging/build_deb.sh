@@ -47,7 +47,9 @@ for user_home in /home/*; do
   user="$(basename "$user_home")"
   if id "$user" >/dev/null 2>&1; then
     sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$(id -u $user)" \
-      systemctl --user enable powerzap-scheduler.service >/dev/null 2>&1 || true
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$(id -u $user)" \
+      systemctl --user enable --now powerzap-scheduler.service >/dev/null 2>&1 || true
   fi
 done
 exit 0

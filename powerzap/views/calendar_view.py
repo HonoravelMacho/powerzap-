@@ -400,7 +400,7 @@ class CalendarView(ft.Column):
                     mouse_cursor=ft.MouseCursor.CLICK,
                 )
                 cells.append(ft.Container(content=cell, expand=True))
-            rows.append(ft.Row(cells, spacing=6, vertical_alignment=ft.Stretch))
+            rows.append(ft.Row(cells, spacing=6, vertical_alignment=ft.CrossAxisAlignment.STRETCH))
         rows.append(ft.Row([ft.Container(expand=True)]))
         self.grid_area.controls = rows
 
