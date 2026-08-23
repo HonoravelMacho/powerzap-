@@ -52,7 +52,7 @@ jobs:
       - name: Instalar fpm e gerar .rpm
         run: |
           sudo apt-get update
-          sudo apt-get install -y ruby
+          sudo apt-get install -y ruby rpm
           sudo gem install --no-document fpm
           bash packaging/build_rpm.sh "dist/powerzap_${{ steps.ver.outputs.version }}_amd64.deb" "${{ steps.ver.outputs.version }}"
 
