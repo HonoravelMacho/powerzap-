@@ -1,6 +1,10 @@
 """Interface principal do PowerZap (Flet)."""
 import flet as ft
 
+from powerzap import crashlog
+
+crashlog.install()
+
 from powerzap import db
 from powerzap.views.calendar_view import CalendarView
 from powerzap.views.tags_view import TagsView

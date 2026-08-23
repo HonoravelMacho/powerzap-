@@ -23,12 +23,13 @@ class ContactPickerDialog(ft.AlertDialog):
         super().__init__(modal=True)
         self.page_ref = page
         self.on_pick = on_pick
-        self.contacts = []
+        self.picked = False
+        self.all_contacts = []
 
         self.search_field = ft.TextField(
             label="Buscar por nome ou número...",
             prefix_icon=ft.icons.SEARCH,
-            on_change=lambda e: self._render_list(),
+            on_change=lambda e: self._filter(),
             border_radius=10,
         )
         self.status_text = ft.Text("", size=12,
@@ -48,7 +49,9 @@ class ContactPickerDialog(ft.AlertDialog):
                     ft.Container(expand=True),
                     ft.IconButton(
                         icon=ft.icons.SYNC, tooltip="Atualizar da API",
-                        on_click=lambda e: self._load(),
+                        on_click=lambda e: threading.Thread(
+                            target=self._sync_from_api, daemon=True
+                        ).start(),
                     ),
                 ]),
                 self.search_field,
@@ -58,52 +61,47 @@ class ContactPickerDialog(ft.AlertDialog):
         )
 
     def open_dialog(self):
+        self.all_contacts = db.list_contacts()
+        self._render_list()
+        self._set_status(f"{len(self.all_contacts)} contato(s) em cache.")
         self.page_ref.open(self)
-        threading.Thread(target=self._load, daemon=True).start()
+        if db.count_contacts() == 0:
+            self._set_status("Sincronizando contatos da Evolution API...")
+        threading.Thread(target=self._sync_from_api, daemon=True).start()
 
     def _set_status(self, msg: str):
         self.status_text.value = msg
         try:
-            self.update()
-        except AssertionError:
+            self.status_text.update()
+        except Exception:
             pass
 
-    def _load(self):
-        cached = db.count_contacts()
-        if not cached:
-            self.list_area.controls = [
-                ft.Container(
-                    alignment=ft.alignment.center, padding=40,
-                    content=ft.ProgressRing(28, stroke_width=3),
-                )
-            ]
-            self._set_status("Sincronizando contatos da Evolution API...")
-        else:
-            self._set_status(f"Atualizando... ({cached} em cache)")
-
+    def _sync_from_api(self):
         try:
-            api = get_api()
-            fresh = api.find_contacts()
-            if fresh or not cached:
-                db.replace_contacts(fresh)
-            source = "API"
-        except (EvolutionError, Exception) as ex:
-            self._set_status(f"Sem conexão com a API — exibindo cache local ({ex.__class__.__name__})")
-            self.contacts = db.list_contacts(self.search_field.value or "")
-            self._render_list()
-            return
+            fresh = get_api().find_contacts()
+            db.replace_contacts(fresh)
+            self.all_contacts = db.list_contacts()
+            if not self.picked:
+                query = (self.search_field.value or "").strip()
+                if query:
+                    self.all_contacts = db.filter_local(self.all_contacts, query)
+                self._render_list()
+                self._set_status(f"{len(fresh)} contato(s) sincronizados da API.")
+        except Exception as ex:
+            if not self.picked:
+                self._set_status(f"Sem conexão com a API — usando cache ({ex.__class__.__name__}).")
 
-        self.contacts = db.list_contacts(self.search_field.value or "")
-        self.status_text.value = f"{len(self.contacts)} contato(s) carregados da {source}."
+    def _filter(self):
+        query = (self.search_field.value or "").strip().lower()
+        if not query:
+            self.all_contacts = db.list_contacts()
+        else:
+            self.all_contacts = db.filter_local(db.list_contacts(), query)
         self._render_list()
 
     def _render_list(self):
-        query = (self.search_field.value or "").strip()
-        items = db.list_contacts(query) if query else (
-            self.contacts if self.contacts else db.list_contacts()
-        )
         rows = []
-        for ct in items[:300]:
+        for ct in self.all_contacts[:300]:
             name = ct["name"] or "(sem nome)"
             icon = ft.icons.GROUPS if ct["is_group"] else ft.icons.PERSON_OUTLINE
             rows.append(
@@ -113,7 +111,7 @@ class ContactPickerDialog(ft.AlertDialog):
                     subtitle=ft.Text(ct["number"], size=12,
                                      color=ft.colors.with_opacity(0.55, ft.colors.WHITE)),
                     dense=True,
-                    on_click=lambda e, c=ct: self._pick(c),
+                    on_click=lambda e, c=dict(ct): self._pick(c),
                 )
             )
         if not rows:
@@ -133,13 +131,20 @@ class ContactPickerDialog(ft.AlertDialog):
             ))
         self.list_area.controls = rows
         try:
-            self.update()
-        except AssertionError:
+            self.list_area.update()
+        except Exception:
             pass
 
     def _pick(self, contact):
-        self.page_ref.close(self)
-        self.on_pick(contact)
+        self.picked = True
+        try:
+            self.on_pick(contact)
+        except Exception:
+            pass
+        try:
+            self.page_ref.close(self)
+        except Exception:
+            pass
 
 
 class MessageDialog(ft.AlertDialog):
@@ -233,8 +238,12 @@ class MessageDialog(ft.AlertDialog):
     def _set_contact(self, contact: dict):
         self.number_field.value = contact["number"]
         try:
-            self.update()
-        except AssertionError:
+            self.number_field.update()
+        except Exception:
+            pass
+        try:
+            self.text_field.focus()
+        except Exception:
             pass
 
     def _close(self):

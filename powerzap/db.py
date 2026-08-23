@@ -203,7 +203,8 @@ def list_contacts(query: str = ""):
         sql += "WHERE lower(name) LIKE ? OR number LIKE ? "
         like = f"%{query.lower()}%"
         params = [like, f"%{query}%"]
-    sql += "ORDER BY is_group, CASE WHEN name = '' THEN 1 ELSE 0 END, name LIMIT 500"
+    sql += ("ORDER BY is_group, CASE WHEN name = '' THEN 1 ELSE 0 END, name "
+            "LIMIT 10000")
     with conn() as c:
         return [dict(r) for r in c.execute(sql, params)]
 
@@ -211,3 +212,16 @@ def list_contacts(query: str = ""):
 def count_contacts() -> int:
     with conn() as c:
         return c.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
+
+
+def filter_local(contacts: list, query: str) -> list:
+    q = (query or "").strip().lower()
+    if not q:
+        return contacts
+    out = []
+    for ct in contacts:
+        name = (ct.get("name") or "").lower()
+        number = str(ct.get("number") or "")
+        if q in name or q in number.lower():
+            out.append(ct)
+    return out
