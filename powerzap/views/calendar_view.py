@@ -1,12 +1,11 @@
 """Calendário interativo em tela cheia com CRUD de mensagens."""
 import calendar as pycal
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import flet as ft
 
 from powerzap import db
-from powerzap.evolution import EvolutionError
 from powerzap.views.connect_view import get_api
 
 STATUS_COLORS = {
@@ -17,148 +16,20 @@ STATUS_COLORS = {
 
 PRESET_HOURS = ["08:00", "09:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00"]
 
-
-class ContactPickerDialog(ft.AlertDialog):
-    def __init__(self, page, on_pick):
-        super().__init__(modal=True)
-        self.page_ref = page
-        self.on_pick = on_pick
-        self.picked = False
-        self.all_contacts = []
-
-        self.search_field = ft.TextField(
-            label="Buscar por nome ou número...",
-            prefix_icon=ft.icons.SEARCH,
-            on_change=lambda e: self._filter(),
-            border_radius=10,
-        )
-        self.status_text = ft.Text("", size=12,
-                                   color=ft.colors.with_opacity(0.6, ft.colors.WHITE))
-        self.list_area = ft.ListView(expand=True, spacing=4)
-
-        self.actions = [
-            ft.TextButton("Fechar", on_click=lambda e: self.page_ref.close(self)),
-        ]
-        self.content = ft.Container(
-            width=540,
-            height=600,
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon(ft.icons.CONTACTS, color=ft.colors.GREEN_400),
-                    ft.Text("Selecionar contato", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Container(expand=True),
-                    ft.IconButton(
-                        icon=ft.icons.SYNC, tooltip="Atualizar da API",
-                        on_click=lambda e: threading.Thread(
-                            target=self._sync_from_api, daemon=True
-                        ).start(),
-                    ),
-                ]),
-                self.search_field,
-                self.list_area,
-                self.status_text,
-            ], tight=False, spacing=10),
-        )
-
-    def open_dialog(self):
-        self.all_contacts = db.list_contacts()
-        self._render_list()
-        self._set_status(f"{len(self.all_contacts)} contato(s) em cache.")
-        self.page_ref.open(self)
-        if db.count_contacts() == 0:
-            self._set_status("Sincronizando contatos da Evolution API...")
-        threading.Thread(target=self._sync_from_api, daemon=True).start()
-
-    def _set_status(self, msg: str):
-        self.status_text.value = msg
-        try:
-            self.status_text.update()
-        except Exception:
-            pass
-
-    def _sync_from_api(self):
-        try:
-            fresh = get_api().find_contacts()
-            db.replace_contacts(fresh)
-            self.all_contacts = db.list_contacts()
-            if not self.picked:
-                query = (self.search_field.value or "").strip()
-                if query:
-                    self.all_contacts = db.filter_local(self.all_contacts, query)
-                self._render_list()
-                self._set_status(f"{len(fresh)} contato(s) sincronizados da API.")
-        except Exception as ex:
-            if not self.picked:
-                self._set_status(f"Sem conexão com a API — usando cache ({ex.__class__.__name__}).")
-
-    def _filter(self):
-        query = (self.search_field.value or "").strip().lower()
-        if not query:
-            self.all_contacts = db.list_contacts()
-        else:
-            self.all_contacts = db.filter_local(db.list_contacts(), query)
-        self._render_list()
-
-    def _render_list(self):
-        rows = []
-        for ct in self.all_contacts[:300]:
-            name = ct["name"] or "(sem nome)"
-            icon = ft.icons.GROUPS if ct["is_group"] else ft.icons.PERSON_OUTLINE
-            rows.append(
-                ft.ListTile(
-                    leading=ft.Icon(icon, color=ft.colors.GREEN_300),
-                    title=ft.Text(name, weight=ft.FontWeight.W_600),
-                    subtitle=ft.Text(ct["number"], size=12,
-                                     color=ft.colors.with_opacity(0.55, ft.colors.WHITE)),
-                    dense=True,
-                    on_click=lambda e, c=dict(ct): self._pick(c),
-                )
-            )
-        if not rows:
-            rows.append(ft.Container(
-                padding=30,
-                content=ft.Column([
-                    ft.Icon(ft.icons.PHONE_DISABLED_OUTLINED, size=36,
-                            color=ft.colors.with_opacity(0.35, ft.colors.WHITE)),
-                    ft.Text(
-                        "Nenhum contato encontrado.\n"
-                        "Conecte o WhatsApp na aba 'Conexão' e envie/receba\n"
-                        "mensagens para que os contatos sejam sincronizados.",
-                        size=12, text_align=ft.TextAlign.CENTER,
-                        color=ft.colors.with_opacity(0.55, ft.colors.WHITE),
-                    ),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            ))
-        self.list_area.controls = rows
-        try:
-            self.list_area.update()
-        except Exception:
-            pass
-
-    def _pick(self, contact):
-        from powerzap import crashlog
-        self.picked = True
-        crashlog.debug(f"picker._pick inicio: {contact['number']}")
-        try:
-            self.on_pick(contact)
-            crashlog.debug("picker._pick: on_pick OK")
-        except Exception:
-            crashlog._write("picker: on_pick FALHOU")
-        try:
-            self.page_ref.close(self)
-            crashlog.debug("picker._pick: close OK")
-        except Exception:
-            crashlog._write("picker: close FALHOU")
+WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 
 class MessageDialog(ft.AlertDialog):
+    """Diálogo único com dois painéis: formulário e lista de contatos."""
+
     def __init__(self, page, on_done, message=None, default_day=None):
         super().__init__(modal=True)
         self.page_ref = page
         self.on_done = on_done
         self.message = message
-        self.selected_tag_id = None
+        self.picker_contacts = []
 
+        # ---------- Formulário ----------
         self.number_field = ft.TextField(
             label="Número do WhatsApp",
             hint_text="5511999999999",
@@ -168,7 +39,7 @@ class MessageDialog(ft.AlertDialog):
             icon=ft.icons.CONTACTS,
             tooltip="Selecionar contato da lista",
             icon_color=ft.colors.GREEN_400,
-            on_click=self._open_picker,
+            on_click=lambda e: self._show_picker(),
         )
         self.text_field = ft.TextField(
             label="Mensagem", multiline=True, min_lines=3, max_lines=6, expand=True
@@ -203,6 +74,50 @@ class MessageDialog(ft.AlertDialog):
             wrap=True, spacing=4,
         )
 
+        self.form_area = ft.Column([
+            ft.Row([self.number_field, pick_contact_btn], spacing=6),
+            self.text_field,
+            ft.Row([self.date_field, self.time_field]),
+            quick_hours,
+            self.tag_dropdown,
+        ], tight=True, spacing=14, visible=True)
+
+        # ---------- Seletor de contatos (mesmo diálogo, sem empilhar) ----------
+        self.search_field = ft.TextField(
+            label="Buscar por nome ou número...",
+            prefix_icon=ft.icons.SEARCH,
+            on_change=lambda e: self._filter(),
+            border_radius=10,
+        )
+        self.picker_status = ft.Text("", size=12,
+                                     color=ft.colors.with_opacity(0.6, ft.colors.WHITE))
+        self.contact_list = ft.ListView(height=420, spacing=4)
+
+        back_btn = ft.IconButton(
+            icon=ft.icons.ARROW_BACK,
+            tooltip="Voltar ao formulário",
+            on_click=lambda e: self._show_form(),
+        )
+        sync_btn = ft.IconButton(
+            icon=ft.icons.SYNC, tooltip="Atualizar da API",
+            on_click=lambda e: threading.Thread(
+                target=self._sync_from_api, daemon=True
+            ).start(),
+        )
+
+        self.picker_area = ft.Column([
+            ft.Row([
+                back_btn,
+                ft.Text("Selecionar contato", size=18, weight=ft.FontWeight.BOLD),
+                ft.Container(expand=True),
+                sync_btn,
+            ]),
+            self.search_field,
+            self.contact_list,
+            self.picker_status,
+        ], tight=False, spacing=10, visible=False)
+
+        # ---------- Ações ----------
         self.actions = [
             ft.TextButton("Cancelar", on_click=lambda e: self._close()),
             ft.FilledButton("Salvar", icon=ft.icons.SAVE, on_click=lambda e: self._save()),
@@ -215,41 +130,128 @@ class MessageDialog(ft.AlertDialog):
                     on_click=lambda e: self._delete(),
                 ),
             )
+
         self.content = ft.Container(
             width=560,
             content=ft.Column([
                 ft.Text("Editar mensagem" if message else "Nova mensagem agendada",
                         size=18, weight=ft.FontWeight.BOLD),
-                ft.Row([self.number_field, pick_contact_btn], spacing=6),
-                self.text_field,
-                ft.Row([self.date_field, self.time_field]),
-                quick_hours,
-                self.tag_dropdown,
+                self.form_area,
+                self.picker_area,
             ], tight=True, spacing=14),
         )
 
-    def _set_hour(self, h):
-        self.time_field.value = h
-        self.update()
+    # ----- navegação entre painéis do diálogo -----
 
-    def _open_picker(self, e=None):
-        picker = ContactPickerDialog(
-            self.page_ref,
-            on_pick=lambda c: self._set_contact(c),
-        )
-        picker.open_dialog()
-
-    def _set_contact(self, contact: dict):
-        from powerzap import crashlog
-        crashlog.debug(f"message._set_contact: {contact['number']}")
-        self.number_field.value = contact["number"]
+    def _show_picker(self):
+        self.picker_area.visible = True
+        self.form_area.visible = False
+        for a in self.actions:          # esconde todos os botões na listagem
+            a.visible = False
+        self._load_contacts()
         try:
-            self.number_field.update()
-            crashlog.debug("message._set_contact: update OK")
+            self.update()
         except Exception:
-            crashlog._write("message: number_field.update FALHOU")
+            pass
+        if db.count_contacts() == 0:
+            self._set_status("Sincronizando contatos da Evolution API...")
+        threading.Thread(target=self._sync_from_api, daemon=True).start()
+
+    def _show_form(self):
+        self.picker_area.visible = False
+        self.form_area.visible = True
+        for a in self.actions:
+            a.visible = True
+        try:
+            self.update()
+        except Exception:
+            pass
+
+    # ----- contatos -----
+
+    def _load_contacts(self):
+        self.picker_contacts = db.list_contacts()
+        self._render_list()
+        self._set_status(f"{len(self.picker_contacts)} contato(s) em cache.")
+
+    def _set_status(self, msg: str):
+        self.picker_status.value = msg
+        try:
+            self.picker_status.update()
+        except Exception:
+            pass
+
+    def _sync_from_api(self):
+        try:
+            fresh = get_api().find_contacts()
+            db.replace_contacts(fresh)
+            self.picker_contacts = db.list_contacts()
+            query = (self.search_field.value or "").strip()
+            if query:
+                self.picker_contacts = db.filter_local(self.picker_contacts, query)
+            self._render_list()
+            self._set_status(f"{len(fresh)} contato(s) sincronizados da API.")
+        except Exception as ex:
+            self._set_status(f"Sem conexão com a API — usando cache ({ex.__class__.__name__}).")
+
+    def _filter(self):
+        query = (self.search_field.value or "").strip().lower()
+        if not query:
+            self.picker_contacts = db.list_contacts()
+        else:
+            self.picker_contacts = db.filter_local(db.list_contacts(), query)
+        self._render_list()
+
+    def _render_list(self):
+        rows = []
+        for ct in self.picker_contacts[:300]:
+            name = ct["name"] or "(sem nome)"
+            icon = ft.icons.GROUPS if ct["is_group"] else ft.icons.PERSON_OUTLINE
+            rows.append(
+                ft.ListTile(
+                    leading=ft.Icon(icon, color=ft.colors.GREEN_300),
+                    title=ft.Text(name, weight=ft.FontWeight.W_600),
+                    subtitle=ft.Text(ct["number"], size=12,
+                                     color=ft.colors.with_opacity(0.55, ft.colors.WHITE)),
+                    dense=True,
+                    on_click=lambda e, c=dict(ct): self._pick(c),
+                )
+            )
+        if not rows:
+            rows.append(ft.Container(
+                padding=30,
+                content=ft.Column([
+                    ft.Icon(ft.icons.PHONE_DISABLED_OUTLINED, size=36,
+                            color=ft.colors.with_opacity(0.35, ft.colors.WHITE)),
+                    ft.Text(
+                        "Nenhum contato encontrado.\n"
+                        "Conecte o WhatsApp na aba 'Conexão' e envie/receba\n"
+                        "mensagens para que os contatos sejam sincronizados.",
+                        size=12, text_align=ft.TextAlign.CENTER,
+                        color=ft.colors.with_opacity(0.55, ft.colors.WHITE),
+                    ),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            ))
+        self.contact_list.controls = rows
+        try:
+            self.contact_list.update()
+        except Exception:
+            pass
+
+    def _pick(self, contact: dict):
+        self.number_field.value = contact["number"]
+        self._show_form()
         try:
             self.text_field.focus()
+        except Exception:
+            pass
+
+    # ----- formulário -----
+
+    def _set_hour(self, h):
+        self.time_field.value = h
+        try:
+            self.update()
         except Exception:
             pass
 
@@ -294,11 +296,16 @@ class CalendarView(ft.Column):
         self.external_on_change = on_change or (lambda: None)
         today = date.today()
         self.year, self.month = today.year, today.month
-        self.selected_day = today.day
-        self.month_label = ft.Text(size=22, weight=ft.FontWeight.BOLD)
+        self.selected_date: date = today
+        self.month_label = ft.Text(size=22, weight=ft.FontWeight.BOLD, width=190,
+                                   text_align=ft.TextAlign.CENTER)
 
-        prev_btn = ft.IconButton(ft.icons.CHEVRON_LEFT, on_click=lambda e: self._move(-1))
-        next_btn = ft.IconButton(ft.icons.CHEVRON_RIGHT, on_click=lambda e: self._move(1))
+        prev_btn = ft.IconButton(ft.icons.CHEVRON_LEFT, tooltip="Mês anterior",
+                                 on_click=lambda e: self._move(-1))
+        next_btn = ft.IconButton(ft.icons.CHEVRON_RIGHT, tooltip="Próximo mês",
+                                 on_click=lambda e: self._move(1))
+        today_btn = ft.OutlinedButton("Hoje", icon=ft.icons.EVENT_AVAILABLE,
+                                      on_click=lambda e: self._go_today())
         new_btn = ft.FilledButton(
             "Nova mensagem", icon=ft.icons.ADD, on_click=lambda e: self.open_dialog()
         )
@@ -306,7 +313,10 @@ class CalendarView(ft.Column):
         header = ft.Container(
             padding=ft.padding.only(left=20, right=20, top=12, bottom=12),
             content=ft.Row([
-                prev_btn, self.month_label, next_btn,
+                prev_btn,
+                self.month_label,
+                next_btn,
+                today_btn,
                 ft.VerticalDivider(width=10),
                 new_btn,
                 ft.Container(expand=True),
@@ -314,7 +324,7 @@ class CalendarView(ft.Column):
             ]),
         )
 
-        self.grid_area = ft.Column(spacing=6, expand=True)
+        self.grid_area = ft.Column(spacing=8, expand=True)
         self.detail_area = ft.Container(
             bgcolor=ft.colors.with_opacity(0.04, ft.colors.WHITE),
             border_radius=12, padding=16,
@@ -322,22 +332,20 @@ class CalendarView(ft.Column):
         )
 
         body = ft.Row(
-            [ft.Container(content=self.grid_area, expand=True, padding=ft.padding.symmetric(horizontal=20)),
+            [ft.Container(content=self.grid_area, expand=True,
+                          padding=ft.padding.only(left=20, bottom=16)),
              self.detail_area],
             spacing=16, expand=True,
         )
         self.controls = [header, ft.Divider(height=1), body]
         self.reload()
 
+    # ---------------- cabeçalho ----------------
+
     def _legend(self):
-        items = [
-            ft.Container(width=12, height=12, border_radius=6, bgcolor=c)
-            for c in STATUS_COLORS.values()
-        ]
-        labels = list(STATUS_COLORS.keys())
         row = []
-        for i, name in enumerate(labels):
-            row.append(items[i])
+        for name, color in STATUS_COLORS.items():
+            row.append(ft.Container(width=12, height=12, border_radius=6, bgcolor=color))
             row.append(ft.Text(name, size=13))
         return ft.Row(row, spacing=6, wrap=True)
 
@@ -358,7 +366,17 @@ class CalendarView(ft.Column):
             self.year, self.month = self.year + 1, 1
         else:
             self.month = m
+        if self.selected_date.month != self.month or self.selected_date.year != self.year:
+            self.selected_date = date(self.year, self.month, 1)
         self.reload()
+
+    def _go_today(self):
+        t = date.today()
+        self.year, self.month = t.year, t.month
+        self.selected_date = t
+        self.reload()
+
+    # ---------------- grade ----------------
 
     def _counts_by_day(self) -> dict:
         counts = {}
@@ -367,69 +385,111 @@ class CalendarView(ft.Column):
             counts.setdefault(d, []).append(msg)
         return counts
 
+    def _month_matrix(self) -> list[list[date]]:
+        """Matriz 6x7 sempre completa, começando na segunda-feira."""
+        first = date(self.year, self.month, 1)
+        start = first - timedelta(days=first.weekday())
+        return [
+            [start + timedelta(days=w * 7 + d) for d in range(7)]
+            for w in range(6)
+        ]
+
+    def _build_cell(self, d: date, msgs: list) -> ft.Control:
+        in_month = d.month == self.month
+        is_today = d == date.today()
+        is_selected = d == self.selected_date
+
+        if is_selected:
+            bg, fg, day_weight = ft.colors.GREEN_700, ft.colors.WHITE, ft.FontWeight.BOLD
+        elif is_today:
+            bg, fg, day_weight = (
+                ft.colors.with_opacity(0.35, ft.colors.BLUE_GREY_700),
+                ft.colors.WHITE, ft.FontWeight.BOLD,
+            )
+        else:
+            bg, fg, day_weight = (
+                ft.colors.with_opacity(0.05, ft.colors.WHITE), None, None
+            )
+
+        badges = ft.Row([
+            ft.Container(width=7, height=7, border_radius=3,
+                         bgcolor=STATUS_COLORS.get(m["status"], ft.colors.GREY))
+            for m in msgs[:9]
+        ], spacing=3, alignment=ft.MainAxisAlignment.CENTER)
+
+        cell = ft.Container(
+            bgcolor=bg,
+            border_radius=12,
+            border=ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.WHITE)),
+            ink=True,
+            on_click=lambda e, dd=d: self._select_day(dd),
+            on_hover=self._hover_cell,
+            data={"base": bg, "ativa": in_month},
+            padding=8,
+            alignment=ft.alignment.center,
+            content=ft.Column([
+                ft.Text(str(d.day), color=fg, weight=day_weight, size=15),
+                badges,
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+               alignment=ft.MainAxisAlignment.CENTER, tight=True),
+        )
+        if not in_month:
+            cell.opacity = 0.28
+        cell.tooltip = d.strftime("%d/%m/%Y")
+        return cell
+
+    @staticmethod
+    def _hover_cell(e: ft.ControlEvent):
+        c: ft.Container = e.control
+        info = c.data or {}
+        if not info.get("ativa"):
+            return
+        if e.data == "true" and c.bgcolor != ft.colors.GREEN_700:
+            c.bgcolor = ft.colors.with_opacity(0.12, ft.colors.WHITE)
+        elif e.data != "true":
+            c.bgcolor = info.get("base")
+        try:
+            c.update()
+        except Exception:
+            pass
+
     def _build_grid(self):
         self.month_label.value = f"{pycal.month_name[self.month].capitalize()} {self.year}"
-        weeks = pycal.monthcalendar(self.year, self.month)
-        days_header = ft.Row(
-            [ft.Container(ft.Text(d, weight=ft.FontWeight.BOLD, size=13,
-                                  color=ft.colors.with_opacity(0.6, ft.colors.WHITE)),
-                          alignment=ft.alignment.center, expand=True)
-             for d in ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]],
-            spacing=6,
-        )
-        rows = [days_header]
+        days_header = ft.Row([
+            ft.Container(ft.Text(d, weight=ft.FontWeight.BOLD, size=13,
+                                 color=ft.colors.with_opacity(0.6, ft.colors.WHITE)),
+                         alignment=ft.alignment.center, expand=True)
+            for d in WEEKDAYS
+        ], spacing=8)
+
         by_day = self._counts_by_day()
+        weeks = self._month_matrix()
+        rows = [days_header]
         for week in weeks:
             cells = []
-            for day in week:
-                if day == 0:
-                    cells.append(ft.Container(expand=True))
-                    continue
-                is_today = (date(self.year, self.month, day) == date.today())
-                is_selected = (day == self.selected_day)
-                key = f"{self.year:04d}-{self.month:02d}-{day:02d}"
-                msgs = by_day.get(key, [])
-                badges = ft.Row([
-                    ft.Container(width=7, height=7, border_radius=3,
-                                 bgcolor=STATUS_COLORS.get(m["status"], ft.colors.GREY))
-                    for m in msgs[:8]
-                ], spacing=2, alignment=ft.MainAxisAlignment.CENTER)
-                cell = ft.GestureDetector(
-                    content=ft.Container(
-                        bgcolor=(
-                            ft.colors.GREEN_700 if is_selected
-                            else ft.colors.with_opacity(0.35, ft.colors.BLUE_GREY_700)
-                            if is_today else
-                            ft.colors.with_opacity(0.05, ft.colors.WHITE)
-                        ),
-                        border_radius=10,
-                        padding=6,
-                        alignment=ft.alignment.center,
-                        content=ft.Column([
-                            ft.Text(str(day),
-                                    weight=ft.FontWeight.BOLD if (is_today or is_selected) else None,
-                                    color=ft.colors.WHITE if is_selected else None),
-                            badges,
-                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
-                    ),
-                    on_tap=lambda e, d=day: self._select_day(d),
-                    mouse_cursor=ft.MouseCursor.CLICK,
-                )
-                cells.append(ft.Container(content=cell, expand=True))
-            rows.append(ft.Row(cells, spacing=6, vertical_alignment=ft.CrossAxisAlignment.STRETCH))
-        rows.append(ft.Row([ft.Container(expand=True)]))
+            for d in week:
+                key = d.isoformat()
+                cells.append(ft.Container(
+                    content=self._build_cell(d, by_day.get(key, [])),
+                    expand=True,
+                ))
+            rows.append(ft.Row(cells, spacing=8, expand=True))
         self.grid_area.controls = rows
 
-    def _select_day(self, day):
-        self.selected_day = day
+    def _select_day(self, d: date):
+        if d.month != self.month or d.year != self.year:
+            self.year, self.month = d.year, d.month
+        self.selected_date = d
         self.reload()
 
+    # ---------------- painel lateral ----------------
+
     def _build_detail(self):
-        key = f"{self.year:04d}-{self.month:02d}-{self.selected_day:02d}"
+        key = self.selected_date.isoformat()
         msgs = sorted(db.list_messages(day=key), key=lambda m: m["scheduled_at"])
         header = ft.Row([
-            ft.Text(f"{self.selected_day:02d}/{self.month:02d}",
-                    size=17, weight=ft.FontWeight.BOLD),
+            ft.Text(self.selected_date.strftime("%d/%m"), size=17,
+                    weight=ft.FontWeight.BOLD),
             ft.Container(expand=True),
             ft.IconButton(ft.icons.ADD_CIRCLE_OUTLINE, tooltip="Nova mensagem",
                           on_click=lambda e: self.open_dialog(default_day=key)),
