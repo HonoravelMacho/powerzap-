@@ -21,6 +21,16 @@ def _write(header: str):
         pass
 
 
+def debug(msg: str):
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        from datetime import datetime
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] DEBUG: {msg}\n")
+    except Exception:
+        pass
+
+
 def install():
     def hook(exc_type, exc_value, exc_tb):
         if issubclass(exc_type, KeyboardInterrupt):

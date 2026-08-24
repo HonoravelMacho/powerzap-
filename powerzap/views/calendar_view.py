@@ -136,15 +136,19 @@ class ContactPickerDialog(ft.AlertDialog):
             pass
 
     def _pick(self, contact):
+        from powerzap import crashlog
         self.picked = True
+        crashlog.debug(f"picker._pick inicio: {contact['number']}")
         try:
             self.on_pick(contact)
+            crashlog.debug("picker._pick: on_pick OK")
         except Exception:
-            pass
+            crashlog._write("picker: on_pick FALHOU")
         try:
             self.page_ref.close(self)
+            crashlog.debug("picker._pick: close OK")
         except Exception:
-            pass
+            crashlog._write("picker: close FALHOU")
 
 
 class MessageDialog(ft.AlertDialog):
@@ -236,11 +240,14 @@ class MessageDialog(ft.AlertDialog):
         picker.open_dialog()
 
     def _set_contact(self, contact: dict):
+        from powerzap import crashlog
+        crashlog.debug(f"message._set_contact: {contact['number']}")
         self.number_field.value = contact["number"]
         try:
             self.number_field.update()
+            crashlog.debug("message._set_contact: update OK")
         except Exception:
-            pass
+            crashlog._write("message: number_field.update FALHOU")
         try:
             self.text_field.focus()
         except Exception:
